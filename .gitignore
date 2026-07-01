@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 仮想環境
+.venv/
+venv/
+env/
+
+# 実行出力（レポート・監査ログ）— 成果物はコミットしない
+out/
+*.log
+
+# 秘密情報（settings.json の deny と対応。絶対にコミットしない）
+.env
+.env.*
+secrets/
+credentials/
+*.pem
+*.key
+
+# 実データ（合成データのみコミット可。実明細は禁止）
+data/
+samples/real/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,79 @@
+{
+  "employees": {
+    "A0": {
+      "name": "社員0",
+      "authority_limit": 100000
+    },
+    "A1": {
+      "name": "社員1",
+      "authority_limit": 100000
+    },
+    "A2": {
+      "name": "社員2",
+      "authority_limit": 100000
+    },
+    "A3": {
+      "name": "社員3",
+      "authority_limit": 100000
+    },
+    "A4": {
+      "name": "社員4",
+      "authority_limit": 100000
+    },
+    "A5": {
+      "name": "社員5",
+      "authority_limit": 100000
+    },
+    "A6": {
+      "name": "社員6",
+      "authority_limit": 100000
+    },
+    "A7": {
+      "name": "社員7",
+      "authority_limit": 100000
+    },
+    "A8": {
+      "name": "社員8",
+      "authority_limit": 100000
+    },
+    "A9": {
+      "name": "社員9",
+      "authority_limit": 100000
+    }
+  },
+  "vendors": {
+    "V0": {
+      "name": "取引先0"
+    },
+    "V1": {
+      "name": "取引先1"
+    },
+    "V2": {
+      "name": "取引先2"
+    },
+    "V3": {
+      "name": "取引先3"
+    },
+    "V4": {
+      "name": "取引先4"
+    },
+    "V5": {
+      "name": "取引先5"
+    },
+    "V6": {
+      "name": "取引先6"
+    },
+    "V7": {
+      "name": "取引先7"
+    },
+    "V8": {
+      "name": "取引先8"
+    },
+    "V9": {
+      "name": "取引先9"
+    }
+  },
+  "policy": {
+    "receipt_required_threshold": 30000
+  }
+}

@@ -42,7 +42,7 @@ PwC「統合自律型のデータ分析監査 — 次世代リスク評価アプ
    - 「`config/rules/rule_catalog.yaml` を使ってルールベース評価器を実装して」→ `rule-authoring` / `analysis-pipeline`
    - 「`docs/agent-design.md` の5フェーズループをオーケストレータとして実装して」→ `agent-orchestration`
    - 「この仕組みを非エンジニアの監査チームに説明する資料を作って」→ `onboarding-explainer`
-4. `docs/` が仕様、`config/` が機械可読の定義。コードは未実装（＝自由に生成させる前提のスケルトン）。
+4. `docs/` が仕様、`config/` が機械可読の定義。**実装は `src/expense_risk/` にある**（下記「実装」参照）。
 5. **定石**: 不確実な設計や複数ファイルにまたがる変更は plan mode で計画してからコードへ。変更後はテスト/スキーマ検証で確認。無関係なタスクに移るときは `/clear`。
 
 ## ファイル一覧
@@ -71,3 +71,64 @@ PwC「統合自律型のデータ分析監査 — 次世代リスク評価アプ
 4. **誤検知（アラート疲れ）管理とモデルリスク管理** — トリアージ階層・スコア較正・確定事案からの学習ループ、およびMLモデルのバリデーション/ドリフト監視/再検証を仕様化。
 
 加えて、独立性の用途切替（Track A/B）と配備レイヤ（3線→2線→1線）、規制フレームワーク（J-SOX・不正リスク対応基準・監査基準報告書240・COSO・ACFE）へのマッピング、データ品質・完全性照合、合成不正によるテスト戦略、他ドメイン（仕訳・購買・給与）への拡張性を補強しています。
+
+---
+
+## 実装
+
+仕様（`docs/`・`config/`）に基づく参照実装が `src/expense_risk/` にあります。Python 3.11+。
+
+### クイックスタート
+
+```bash
+pip install -r requirements.txt
+
+# 合成不正データで一気通貫デモ（検出力 Recall/Precision を表示）
+python run.py demo --out out/
+
+# 実データ(JSON)を分析しレポート生成
+python run.py run --input samples/synthetic/expense_lines.json \
+                  --masters samples/synthetic/masters.json --out out/
+
+# テスト
+pytest
+```
+
+生成物: `out/all_findings.csv`（全件スコア）、`out/alerts.xlsx`（アラート＋サマリ）、
+`out/summary.json`、`out/summary.md`（エグゼクティブサマリ）、
+`out/audit_log.jsonl`（WORM＋ハッシュチェーンの監査ログ）。
+
+### モジュール構成（docs のレイヤに対応）
+
+| モジュール | 役割 | 対応ドキュメント |
+|---|---|---|
+| `contracts.py` | 4つのデータ契約＋JSON Schema検証 | `data-contracts` / `data_contracts.json` |
+| `config.py` | ルール/シナリオ/エンゲージメント構成のロード | `rule-authoring` |
+| `etl.py` | L1 取込・データ品質ゲート・完全性照合 | architecture §4 |
+| `features.py` | L2 特徴量・申請者行動プロファイル | architecture §1 |
+| `rules/` | L3① ルール評価（決定論20＋統計7を実装、他は透明に未実装明示） | `analysis-pipeline` |
+| `ml/anomaly.py` | L3③ Isolation Forest / PCA / LOF ＋ 寄与要因 | architecture §1 |
+| `scoring.py` | ルール+ML統合（逓減加算・上限100）・トリアージ・ファネル選別 | analysis-pipeline |
+| `agent/` | L4 5フェーズ自律ループ・read-only コネクタ・注入検知・HITL | `agent-orchestration` / `security-and-privacy` |
+| `audit/` | WORM＋ハッシュチェーン監査ログ | `governance-independence` |
+| `governance.py` | Track A/B独立性ゲート・model_version・規制マップ | `governance-independence` |
+| `report.py` | L5 CSV/Excel/JSON/Markdown レポート | architecture §2 |
+| `synthetic.py` | 合成不正生成＋検出力評価（テスト戦略 §9） | spec-improvements §9 |
+| `pipeline.py` | L1→L5 一気通貫のオーケストレーション | architecture §3 |
+
+### 実装が守る絶対原則（テストで検証）
+
+- **HITL**: すべての所見は `hitl_status = pending`。AIは `confirmed` にできない。
+- **プロンプトインジェクション耐性**: 証憑テキストの注入/不可視文字を検知（CONS-006）。
+  ツール選択は計画（シナリオ）のみが決め、証憑コンテンツから発火させない。
+- **証跡保全**: 監査ログはWORM＋ハッシュチェーン。1件でも改ざんすると鎖が切れて検知。
+- **read-only・最小権限・プライバシーゲート**: 機微コネクタ（予定表/メール/会議）は
+  法的基盤＋G1承認が揃わないと技術的に起動しない（既定は無効）。
+- **根拠なきスコア禁止**: 全所見に rationale（違反ルール/ML寄与/収集証憑）を付与しスキーマ強制。
+- **決定論・再現性**: 同じ入力・構成なら同じスコア／同じ model_version。
+
+> ⚠️ 証憑コネクタ（`agent/connectors.py`）は決定論的な**モック**です。実データ接続時も同じ
+> インタフェースとゲートを保つ差込口として実装しています。PDF/PPTX 出力は将来拡張
+> （CSV/XLSX/JSON/Markdown は生成可能）。検知ルールは決定論20＋統計7を実装済みで、
+> 残りの決定論/統計ルールと agent_verified/ml_assisted の対応は `summary.md` の
+> 「ルールカバレッジ」に**透明に明示**されます（暗黙の取りこぼしを作らない）。
