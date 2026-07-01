@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>経費不正リスク分析 — 監査人コンソール</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- ブランドバー（PwC VI カラーに準拠したアプローチ／ロゴは非使用） -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <div class="brand-text">
+        <strong>経費不正リスク分析</strong>
+        <span>自律AIエージェント — 監査人コンソール（HITL）</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span id="engagement-chip" class="chip chip-ghost">—</span>
+      <span id="chain-chip" class="chip chip-ghost">監査証跡 —</span>
+      <button id="reset-btn" class="btn btn-ghost btn-sm" title="デモ状態を初期化">リセット</button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="sidenav">
+      <a href="#/dashboard" data-route="dashboard" class="nav-item">
+        <span class="nav-ico">▚</span>ダッシュボード</a>
+      <a href="#/findings" data-route="findings" class="nav-item">
+        <span class="nav-ico">≣</span>所見一覧</a>
+      <a href="#/audit" data-route="audit" class="nav-item">
+        <span class="nav-ico">⛓</span>監査証跡</a>
+      <a href="#/governance" data-route="governance" class="nav-item">
+        <span class="nav-ico">§</span>ガバナンス</a>
+      <div class="nav-foot">
+        <p class="muted-xs">AIは所見を<strong>提示</strong>するのみ。確定・是正・通報は<strong>監査人</strong>が判断します（HITL）。</p>
+      </div>
+    </nav>
+
+    <main id="view" class="view"><div class="loading">読み込み中…</div></main>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>
