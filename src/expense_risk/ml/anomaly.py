@@ -59,8 +59,11 @@ class AnomalyResult:
 
 
 def _minmax(values: np.ndarray) -> np.ndarray:
+    values = np.nan_to_num(np.asarray(values, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+    if values.size == 0:
+        return values
     lo, hi = float(values.min()), float(values.max())
-    if hi - lo < 1e-12:
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi - lo < 1e-12:
         return np.zeros_like(values)
     return (values - lo) / (hi - lo)
 
@@ -108,6 +111,8 @@ def detect_anomalies(
         return AnomalyResult(model=method, skipped=True,
                              reason=f"サンプル数 {len(ids)} < {MIN_SAMPLES}（ML をスキップ）")
 
+    # 特徴量に非有限値が混入していても ML を破綻させない（境界で正規化）
+    X = np.nan_to_num(np.asarray(X, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
     scaler = StandardScaler()
     Xs = scaler.fit_transform(X)
 

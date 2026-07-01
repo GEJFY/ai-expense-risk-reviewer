@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from ..contracts import Evidence, Provenance
@@ -39,6 +39,8 @@ TOOL_EVIDENCE_TYPE = {
 ALLOWED_TOOLS = frozenset(TOOL_EVIDENCE_TYPE)
 # 非信頼コンテンツを返すコネクタ（注入検査の対象）
 UNTRUSTED_TOOLS = frozenset({"ocr.extract", "mail.search", "sanctions.lookup"})
+# 法的基盤の未記入・仮置きとみなす値（機微コネクタの起動を許さない）
+_PLACEHOLDER_LEGAL_BASIS = frozenset({"", "-", "todo", "tbd", "tba", "placeholder", "xxx", "none", "null", "n/a", "na"})
 
 # call status
 OK = "ok"
@@ -98,8 +100,9 @@ class ConnectorRegistry:
         if not cfg.get("enabled", False):
             return False, BLOCKED_DISABLED
         if cfg.get("sensitive", False):
-            if not cfg.get("legal_basis_ref"):
-                return False, BLOCKED_NO_LEGAL_BASIS   # プライバシー法的基盤の未充足
+            lb = cfg.get("legal_basis_ref")
+            if not lb or str(lb).strip().lower() in _PLACEHOLDER_LEGAL_BASIS:
+                return False, BLOCKED_NO_LEGAL_BASIS   # プライバシー法的基盤の未充足/仮置き
             if not self.allow_sensitive_approved:
                 return False, REQUIRES_APPROVAL          # G1 事前承認が必要
         if self._call_counts.get(tool, 0) >= self.rate_limit:
@@ -142,7 +145,7 @@ class ConnectorRegistry:
     def _retention_until(self, line: Any) -> Optional[str]:
         if not self._retention_days:
             return None
-        base = parse_date(getattr(line, "transaction_date", None)) or (self.clock or datetime.utcnow()).date()
+        base = parse_date(getattr(line, "transaction_date", None)) or (self.clock or datetime.now(timezone.utc)).date()
         return (base + timedelta(days=self._retention_days)).isoformat()
 
     # --- 各ツールの取得（モック。実データ接続時も戻り値の形は同じ） ---

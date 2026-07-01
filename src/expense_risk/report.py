@@ -83,6 +83,8 @@ def write_reports(
 
     rows = [_finding_row(f, lines_by_id.get(f.expense_line_id)) for f in result.findings]
     rows.sort(key=lambda r: r["risk_score"], reverse=True)
+    # 上位抽出・Markdown で使い回すため、ソート済み所見を一度だけ作る
+    sorted_findings = sorted(result.findings, key=lambda f: f.risk_score, reverse=True)
     df_all = pd.DataFrame(rows)
     paths: dict[str, str] = {}
 
@@ -120,7 +122,7 @@ def write_reports(
         "rule_coverage": cov,
         "regulatory_map": REGULATORY_MAP,
         "top_findings": [_finding_row(f, lines_by_id.get(f.expense_line_id)) for f in
-                         sorted(result.findings, key=lambda f: f.risk_score, reverse=True)[:top_n]],
+                         sorted_findings[:top_n]],
         "audit": {"entries": len(result.audit), "chain_ok": chain_ok, "problems": chain_problems},
         "disclaimer_ja": _DISCLAIMER,
     }
@@ -130,7 +132,8 @@ def write_reports(
 
     # --- Markdown（エグゼクティブサマリ） ---
     md_path = out / "summary.md"
-    md_path.write_text(_markdown_summary(result, rows, cat_df, top_n), encoding="utf-8")
+    md_path.write_text(
+        _markdown_summary(result, cat_df, top_n, lines_by_id, sorted_findings), encoding="utf-8")
     paths["summary_md"] = str(md_path)
 
     # --- 監査ログ（JSONL） ---
@@ -171,10 +174,9 @@ def _coverage_df(cov: dict[str, Any]) -> pd.DataFrame:
     ])
 
 
-def _markdown_summary(result: PipelineResult, rows, cat_df, top_n) -> str:
+def _markdown_summary(result: PipelineResult, cat_df, top_n, lines_by_id, sorted_findings) -> str:
     st = result.stats
     recon = result.reconciliation
-    lines_by_id = {ln.expense_line_id: ln for ln in result.lines}
     chain_ok = result.audit.verify_chain()[0]
 
     parts: list[str] = []
@@ -202,7 +204,7 @@ def _markdown_summary(result: PipelineResult, rows, cat_df, top_n) -> str:
     parts.append(f"\n## 注目リスク TOP {top_n}\n")
     parts.append("| finding | 明細 | 費目 | スコア | 重大度 | トリアージ | 主な根拠 |")
     parts.append("|---|---|---|---:|---|---|---|")
-    for f in sorted(result.findings, key=lambda f: f.risk_score, reverse=True)[:top_n]:
+    for f in sorted_findings[:top_n]:
         line = lines_by_id.get(f.expense_line_id)
         cat = getattr(line, "expense_category", "") or ""
         rules = ", ".join(m.rule_id for m in f.rationale.matched_rules[:4]) or "ML/その他"

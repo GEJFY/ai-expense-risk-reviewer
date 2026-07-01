@@ -133,7 +133,6 @@ def run_pipeline(
     # スコア・選別（ファネル）
     scored = score_lines(rule_result, anomaly, catalog,
                          data_quality=ingested.data_quality, ml_weight=config.ml_weight)
-    scored_by_id = {s.expense_line_id: s for s in scored}
     lines_by_id = {ln.expense_line_id: ln for ln in ingested.lines}
 
     selected = [s for s in scored if s.triage in config.agent_triage_levels]
@@ -188,6 +187,13 @@ def run_pipeline(
             engagement_mode=governance.engagement_mode,
         )
         assert_valid(finding.to_dict(), "RiskFinding")  # 出力スキーマ強制
+        # 根拠なきスコア禁止（スキーマは空 rationale を許すため、実装側で fail-closed に強制）
+        if finding.risk_score > 0 and not (
+            rationale.matched_rules or rationale.ml_attribution or rationale.evidence_refs
+        ):
+            raise ValueError(
+                f"根拠なきスコアを検出: {finding.finding_id} risk_score={finding.risk_score}"
+            )
         findings.append(finding)
 
     stats = _build_stats(scored, findings, rule_result.coverage, anomaly.skipped)

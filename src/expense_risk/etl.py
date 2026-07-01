@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -101,12 +102,15 @@ def ingest(
         if schema_errs:
             flags.append(DQ_SCHEMA_VIOLATION)
 
-        # 金額の妥当性
+        # 金額の妥当性（非有限 NaN/Inf も非正として扱い、合計に混入させない）
         try:
             amt = float(line.amount)
-            amount_sum += amt
-            if amt <= 0:
+            if not math.isfinite(amt):
                 flags.append(DQ_AMOUNT_NON_POSITIVE)
+            else:
+                amount_sum += amt
+                if amt <= 0:
+                    flags.append(DQ_AMOUNT_NON_POSITIVE)
         except (TypeError, ValueError):
             flags.append(DQ_AMOUNT_NON_POSITIVE)
 

@@ -18,7 +18,7 @@ from typing import Any, Callable, Optional
 
 from ..contracts import ExpenseLine
 from ..features import FeatureSet
-from ..util import parse_date, parse_datetime
+from ..util import finite_float, is_round, parse_date, parse_datetime
 
 # 統計ルールの既定パラメタ（クライアント別に調整可能）
 DEFAULT_PARAMS: dict[str, float] = {
@@ -393,13 +393,10 @@ def _stat_amt_001(ctx: RuleContext) -> dict[str, str]:
         if prof.get("count", 0) < min_count:
             continue
         if prof.get("round_ratio", 0.0) >= thr:
-            try:
-                if float(ln.amount) and float(ln.amount) % 1000 == 0:
-                    out[ln.expense_line_id] = (
-                        f"申請者 {ln.applicant_id} のキリ金額比率 {prof['round_ratio']:.0%}（水増し/概算の兆候）"
-                    )
-            except (TypeError, ValueError):
-                continue
+            if is_round(finite_float(ln.amount)):
+                out[ln.expense_line_id] = (
+                    f"申請者 {ln.applicant_id} のキリ金額比率 {prof['round_ratio']:.0%}（水増し/概算の兆候）"
+                )
     return out
 
 
@@ -439,9 +436,9 @@ def _stat_part_003(ctx: RuleContext) -> dict[str, str]:
             continue
         cs = ctx.features.category_stats.get(ln.expense_category, {})
         std = cs.get("per_head_std", 0.0)
-        if not std:
+        if not std or not math.isfinite(std):  # NaN は `not std` を通過するため明示的に弾く
             continue
-        per_head = float(ln.amount) / heads
+        per_head = finite_float(ln.amount) / heads
         z = (per_head - cs.get("per_head_mean", 0.0)) / std
         if abs(z) >= z_thr:
             out[ln.expense_line_id] = (

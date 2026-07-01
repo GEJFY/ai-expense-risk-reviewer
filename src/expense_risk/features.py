@@ -14,7 +14,7 @@ from typing import Any, Optional
 import numpy as np
 
 from .contracts import ExpenseLine
-from .util import parse_datetime
+from .util import finite_float, is_round, parse_datetime
 
 # ML が使う数値特徴量の列（この順序で行列化する）
 NUMERIC_FEATURES = (
@@ -75,10 +75,7 @@ def compute_features(lines: list[ExpenseLine]) -> FeatureSet:
     first_digit_by_applicant: dict[str, dict[int, int]] = {}
 
     for ln in lines:
-        try:
-            amt = float(ln.amount)
-        except (TypeError, ValueError):
-            amt = 0.0
+        amt = finite_float(ln.amount)  # NaN/Inf は 0 に正規化（伝播防止）
         cat = ln.expense_category or "unknown"
         appl = ln.applicant_id or "unknown"
         heads = len(ln.participants) if ln.participants else 0
@@ -87,7 +84,7 @@ def compute_features(lines: list[ExpenseLine]) -> FeatureSet:
         cat_amounts.setdefault(cat, []).append(amt)
         cat_perhead.setdefault(cat, []).append(per_head)
         appl_amounts.setdefault(appl, []).append(amt)
-        appl_rounds.setdefault(appl, []).append(1 if amt and amt % 1000 == 0 else 0)
+        appl_rounds.setdefault(appl, []).append(1 if is_round(amt) else 0)
         appl_categories.setdefault(appl, {})
         appl_categories[appl][cat] = appl_categories[appl].get(cat, 0) + 1
         if ln.vendor_id:
@@ -140,10 +137,7 @@ def compute_features(lines: list[ExpenseLine]) -> FeatureSet:
     # --- 第2パス: 明細ごとの特徴量 ---
     per_line: dict[str, dict[str, float]] = {}
     for ln in lines:
-        try:
-            amt = float(ln.amount)
-        except (TypeError, ValueError):
-            amt = 0.0
+        amt = finite_float(ln.amount)
         cat = ln.expense_category or "unknown"
         appl = ln.applicant_id or "unknown"
         heads = len(ln.participants) if ln.participants else 0
@@ -171,7 +165,7 @@ def compute_features(lines: list[ExpenseLine]) -> FeatureSet:
             "dow": float(dow),
             "is_weekend": float(is_weekend),
             "is_night": float(is_night),
-            "is_round_1000": 1.0 if (amt and amt % 1000 == 0) else 0.0,
+            "is_round_1000": 1.0 if is_round(amt) else 0.0,
             "headcount": float(heads),
             "amount_per_head": per_head,
             "amount_z_in_category": ((amt - cs.get("amount_mean", 0.0)) / cat_std) if cat_std > 0 else 0.0,

@@ -49,12 +49,27 @@ class Governance:
     def is_track_b(self) -> bool:
         return self.engagement_mode == TRACK_B
 
+    # track_b で必須の独立性チェック項目（config に無くても欠落として扱う）
+    REQUIRED_INDEPENDENCE_KEYS = (
+        "self_review_threat_assessed",
+        "remediation_advice_only",
+        "client_decision_record_required",
+        "qmr_legal_signoff",
+    )
+
     def independence_issues(self) -> list[str]:
-        """track_b で未充足の独立性チェック項目を返す（track_a では空）。"""
+        """track_b で未充足の独立性チェック項目を返す（track_a では空）。
+
+        チェックリストが空/欠落でも「充足」とはみなさない ── 必須キーが欠けていれば
+        欠落として明示し、ゲートで確実にブロックする（空dictでの素通りを防ぐ）。
+        """
         if not self.is_track_b:
             return []
         checklist = self.engagement_config.get("independence_checklist", {}) or {}
-        return sorted(k for k, v in checklist.items() if not v)
+        issues = [k for k in self.REQUIRED_INDEPENDENCE_KEYS if not checklist.get(k)]
+        # 必須以外にも false 項目があれば併せて報告
+        issues += [k for k, v in checklist.items() if k not in self.REQUIRED_INDEPENDENCE_KEYS and not v]
+        return sorted(set(issues))
 
     def enforce_gate(self) -> None:
         """独立性ゲート。track_b で未充足なら実行をブロックする（起動条件）。"""

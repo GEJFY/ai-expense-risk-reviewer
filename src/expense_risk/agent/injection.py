@@ -17,25 +17,38 @@ import re
 import unicodedata
 from typing import Any
 
-# 判定操作・指示上書きを狙う既知パターン（日本語・英語）
+# 判定操作・指示上書きを狙う既知パターン（日本語・英語）。
+# トークン間は \s* にして「空白挿入による回避」に耐える。加えて scan_text は空白・
+# 区切り記号を除去した正規化テキストも走査する（`i.gnore` 等の難読化対策）。
 _INJECTION_PATTERNS = [
-    r"ignore\s+(all\s+)?(previous|prior|above)\s+instructions",
-    r"disregard\s+(the\s+)?(previous|above|system)",
+    # --- 指示の上書き ---
+    r"ignore\s*(all\s*)?(previous|prior|above)\s*instructions",
+    r"disregard\s*(the\s*)?(previous|above|system)",
+    r"override\s*(system|process|control|audit|rules)",
     r"system\s*prompt",
-    r"you\s+are\s+now",
-    r"do\s+not\s+flag",
-    r"mark\s+(this|it)\s+as\s+(approved|normal|safe)",
-    r"これまで(の|の全ての)?指示を無視",
+    r"you\s*are\s*now",
+    # --- 検知の抑制（英語） ---
+    r"do\s*not\s*flag",
+    r"(suspend|bypass|skip|waive|disable)\s*(the\s*)?(audit|review|check|flag|control)",
+    r"no\s*(further|additional|more)\s*(review|check|audit)",
+    r"(mark|clear|approve)\s*(this|it|the)?\s*(transaction|expense|claim|item)?\s*as?\s*(approved|normal|safe|cleared)",
+    r"already\s*(approved|verified|checked|cleared)",
+    # --- 検知の抑制（日本語） ---
+    r"これまで(の|の全ての)?指示を(無視|忘れ)",
     r"以前の指示を(無視|忘れ)",
     r"正常(と|だと)(判定|みなし)",
     r"フラグを(付け|たて)ない",
     r"問題(ない|なし)と(判定|報告)",
-    r"承認済み(です|とする)",
-    r"監査\s*(AI|エージェント|システム)\s*[へに:]",
+    r"承認済み?(です|とする|扱い)",
+    r"(監査|チェック|レビュー)(を)?(スキップ|省略|不要)",
+    r"監査\s*(AI|エージェント|システム)\s*[へに:：]",
     r"AI\s*[へに]\s*[:：]",
     r"この(経費|申請|取引)は(正常|適正|承認済)",
 ]
 _COMPILED = [re.compile(p, re.IGNORECASE) for p in _INJECTION_PATTERNS]
+
+# 難読化に使われる区切り・空白（正規化時に除去）
+_OBFUSCATION_CHARS = str.maketrans("", "", " \t　.．・-_*|/\\")
 
 # 不可視・ゼロ幅文字（本文への埋め込み隠蔽に使われる）
 _INVISIBLE = {
@@ -54,8 +67,11 @@ def scan_text(text: Any) -> list[str]:
         return []
     flags: list[str] = []
 
+    # 生テキストに加え、空白・区切り記号を除去した正規化テキストも走査する
+    # （「これまでの 指示を 無視」「i.gnore」等の空白/記号挿入による回避に対抗）。
+    normalized = text.translate(_OBFUSCATION_CHARS)
     for rx in _COMPILED:
-        m = rx.search(text)
+        m = rx.search(text) or rx.search(normalized)
         if m:
             snippet = m.group(0)[:40]
             flags.append(f"{FLAG_INJECTION_PATTERN}:{snippet}")

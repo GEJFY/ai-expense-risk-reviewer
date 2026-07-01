@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import random
 
-from expense_risk.config import load_rule_catalog
 from expense_risk.etl import ingest
 from expense_risk.features import compute_features
 from expense_risk.ml import detect_anomalies
@@ -44,7 +43,6 @@ def test_small_sample_skips_ml():
 
 
 def test_combine_score_capped_and_diminishing():
-    cat = load_rule_catalog()
     h = lambda w: RuleHit("X", w, "high", "review", "AMT", "d")
     s1 = combine_score([h(35)], 0.0)
     s2 = combine_score([h(35), h(35)], 0.0)

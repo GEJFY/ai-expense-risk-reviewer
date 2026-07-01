@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
@@ -33,6 +34,26 @@ def sha256_hex(text: str) -> str:
 def content_hash(obj: Any) -> str:
     """任意オブジェクトの正規化ハッシュ（証憑画像ハッシュ・設定ハッシュ等）。"""
     return sha256_hex(canonical_json(obj))
+
+
+def finite_float(value: Any, default: float = 0.0) -> float:
+    """float 化。変換不能・非有限（NaN/Inf）は default に落とす（NaN 伝播の防止）。
+
+    JSON は本来 NaN/Infinity を許さないが、Python の ``json.loads`` は既定で受理する。
+    非有限値がスコアや監査ログに伝播すると 0-100 制約を破るため、境界で必ず正規化する。
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    return f if math.isfinite(f) else default
+
+
+def is_round(amount: float, base: int = 1000, tol: float = 0.01) -> bool:
+    """金額が base の倍数か（浮動小数の丸め誤差に耐える許容判定）。"""
+    if not math.isfinite(amount) or amount == 0:
+        return False
+    return abs(amount - round(amount / base) * base) < tol
 
 
 def parse_datetime(value: Any) -> Optional[datetime]:
