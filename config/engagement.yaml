@@ -1,0 +1,84 @@
+# ==========================================================================
+# エンゲージメント構成 (engagement.yaml)
+# --------------------------------------------------------------------------
+# 独立性の用途切替（Track A/B）とコネクタの法的基盤を構成で明示する。
+# 詳細は docs/governance.md §1 / docs/security-privacy.md §3。要法務確認。
+#
+#   engagement_mode:
+#     track_a = 被監査会社の内部監査・不正調査支援（既定）
+#     track_b = 監査法人による外部商用化 / 法定監査での利用
+#             → 是正提案は「助言」表現に制限、独立性チェックリスト充足が起動条件
+# ==========================================================================
+
+engagement_mode: track_a
+
+# --- モデルリスク管理（docs/governance.md §2）---
+model_risk:
+  model_owner: "内部監査部門"
+  last_validated: "2026-06-01"        # 導入前バリデーション日
+  revalidation_due: "2027-06-01"      # 定期再検証期日
+  drift_monitoring: true
+
+# --- 独立性チェックリスト（track_b の起動条件）---
+# track_b では全項目 true でなければ実行をブロックする（governance.independence_gate）。
+independence_checklist:
+  self_review_threat_assessed: false
+  remediation_advice_only: false
+  client_decision_record_required: false
+  qmr_legal_signoff: false
+
+# --- 証憑コネクタの法的基盤（security-privacy §3）---
+# 未充足（enabled=false または法的基盤欠落）のコネクタは技術的に起動をブロックする。
+# calendar/mail/meeting は従業員個人データを扱うため既定で無効（要労使協議・本人通知）。
+connectors:
+  master.lookup:
+    enabled: true
+    access_scope: "read"
+    purpose_ja: "内部マスタ（従業員・取引先・規程・上限）の照会"
+    legal_basis_ref: "internal-master-readonly"
+    sensitive: false
+  sanctions.lookup:
+    enabled: true
+    access_scope: "read"
+    purpose_ja: "取引先の反社・制裁・公開情報照合"
+    legal_basis_ref: "aml-screening"
+    sensitive: false
+  route.estimate:
+    enabled: true
+    access_scope: "—"
+    purpose_ja: "経路探索による妥当運賃の算定"
+    legal_basis_ref: "public-route-api"
+    sensitive: false
+  geo.resolve:
+    enabled: true
+    access_scope: "—"
+    purpose_ja: "店舗所在地・業態の整合確認"
+    legal_basis_ref: "public-map-api"
+    sensitive: false
+  ocr.extract:
+    enabled: true
+    access_scope: "—"
+    purpose_ja: "領収書OCRの抽出と申請突合"
+    legal_basis_ref: "submitted-receipt"
+    sensitive: false
+  calendar.query:
+    enabled: false                     # 従業員個人データ: 労使協議・本人通知が前提
+    access_scope: "Calendars.Read"
+    purpose_ja: "当該日時の会食/出張予定の確認"
+    legal_basis_ref: null              # 未充足のため null（充足まで無効）
+    sensitive: true
+  mail.search:
+    enabled: false
+    access_scope: "Mail.Read"
+    purpose_ja: "御礼/日程メールの有無・相手方一致"
+    legal_basis_ref: null
+    sensitive: true
+  meeting.attendees:
+    enabled: false
+    access_scope: "OnlineMeetings.Read"
+    purpose_ja: "会議出席者と申請参加者の一致"
+    legal_basis_ref: null
+    sensitive: true
+
+# 証憑保持ポリシー（保存期間。security-privacy §3・governance §4）
+evidence_retention_days: 2555          # 約7年（監査・経費の保存義務想定）
