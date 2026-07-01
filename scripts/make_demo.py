@@ -80,6 +80,8 @@ def build_scenes(critical_id, injection_id):
     def confirm(p):
         p.eval_on_selector("[data-dec=confirm]", "el=>el.scrollIntoView({block:'center'})")
         p.wait_for_timeout(400)
+        p.fill("#hitl-note", "証憑（反社該当）を確認。原本と申請者ヒアリングを実施し確定。")
+        p.wait_for_timeout(500)
         p.click("[data-dec=confirm]")
         p.wait_for_timeout(900)
 
