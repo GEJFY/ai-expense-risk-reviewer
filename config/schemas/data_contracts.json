@@ -1,0 +1,191 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "経費不正リスク分析 データ契約 (data_contracts)",
+  "description": "モジュール間 I/O のスキーマ。すべての入出力はこれに準拠する。スキーマ違反は実行時に検証し、所見に data_quality フラグを付す。",
+  "definitions": {
+
+    "ExpenseLine": {
+      "type": "object",
+      "description": "入力: 経費精算明細の1行。分析対象の最小単位。",
+      "required": ["expense_line_id", "applicant_id", "transaction_date", "amount", "currency", "expense_category"],
+      "properties": {
+        "expense_line_id": { "type": "string", "description": "明細の一意ID" },
+        "applicant_id": { "type": "string", "description": "申請者ID（従業員マスタ参照）" },
+        "approver_id": { "type": ["string", "null"], "description": "承認者ID" },
+        "transaction_date": { "type": "string", "format": "date", "description": "取引発生日" },
+        "transaction_datetime": { "type": ["string", "null"], "format": "date-time", "description": "取引発生日時（時刻分析用）" },
+        "entry_timestamp": { "type": ["string", "null"], "format": "date-time", "description": "申請入力日時" },
+        "approval_timestamp": { "type": ["string", "null"], "format": "date-time", "description": "承認日時" },
+        "amount": { "type": "number", "description": "申請額" },
+        "currency": { "type": "string", "description": "通貨コード(ISO 4217)", "default": "JPY" },
+        "expense_category": { "type": "string", "description": "費目（交際費/旅費交通費/会議費/消耗品/通信・IT/接待 等）" },
+        "payment_method": { "type": ["string", "null"], "enum": ["corporate_card", "cash", "invoice", "other", null], "description": "支払手段" },
+        "vendor_id": { "type": ["string", "null"], "description": "取引先ID" },
+        "vendor_name": { "type": ["string", "null"], "description": "取引先名（生値・名寄せ前）" },
+        "vendor_address": { "type": ["string", "null"] },
+        "department": { "type": ["string", "null"], "description": "申請者部門" },
+        "description": { "type": ["string", "null"], "description": "摘要" },
+        "participants": {
+          "type": ["array", "null"],
+          "description": "参加者（交際費等）。空配列/不特定表現は PART ルールで検知",
+          "items": { "type": "string" }
+        },
+        "location": {
+          "type": ["object", "null"],
+          "description": "取引地点（地点矛盾・経路検証用）",
+          "properties": {
+            "name": { "type": "string" },
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          }
+        },
+        "receipt_image": { "type": ["string", "null"], "description": "領収書画像の参照（パス/ID）。OCR・ハッシュ対象" },
+        "approval_limit": { "type": ["number", "null"], "description": "適用される承認上限" },
+        "category_limit": { "type": ["number", "null"], "description": "費目上限" },
+        "estimate_flag": { "type": ["boolean", "null"], "description": "概算/見積精算フラグ" },
+        "source_system": { "type": ["string", "null"], "description": "取得元システム（完全性照合用）" }
+      }
+    },
+
+    "RiskFinding": {
+      "type": "object",
+      "description": "出力: 1明細に対するリスク所見。根拠なきスコアは禁止（rationale 必須）。",
+      "required": ["finding_id", "expense_line_id", "risk_score", "severity", "rationale", "triage", "model_version", "generated_at"],
+      "properties": {
+        "finding_id": { "type": "string" },
+        "expense_line_id": { "type": "string" },
+        "risk_score": { "type": "number", "minimum": 0, "maximum": 100, "description": "統合リスクスコア(0-100)" },
+        "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "triage": {
+          "type": "string",
+          "enum": ["auto_dismiss", "review", "escalate"],
+          "description": "既定トリアージ（thresholds に基づく）。最終判断は HITL"
+        },
+        "rationale": {
+          "type": "object",
+          "description": "根拠（説明可能性）。違反ルール・ML寄与・収集証憑のいずれかは必須。",
+          "required": ["matched_rules", "ml_attribution", "evidence_refs"],
+          "properties": {
+            "matched_rules": {
+              "type": "array",
+              "description": "該当した rule_catalog のルール",
+              "items": {
+                "type": "object",
+                "required": ["rule_id", "weight"],
+                "properties": {
+                  "rule_id": { "type": "string" },
+                  "weight": { "type": "number" },
+                  "detail_ja": { "type": "string", "description": "なぜ該当したか" }
+                }
+              }
+            },
+            "ml_attribution": {
+              "type": ["object", "null"],
+              "description": "ML外れ値検知の寄与（SHAP上位）",
+              "properties": {
+                "model": { "type": "string", "enum": ["isolation_forest", "lof", "autoencoder", "pca"] },
+                "anomaly_score": { "type": "number" },
+                "shap_top_features": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "feature": { "type": "string" },
+                      "contribution": { "type": "number" }
+                    }
+                  }
+                }
+              }
+            },
+            "evidence_refs": {
+              "type": "array",
+              "description": "収集・参照した証憑のID（Evidence 参照）",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "hypotheses": {
+          "type": "array",
+          "description": "エージェントが検証した仮説（fraud_scenarios 由来）",
+          "items": {
+            "type": "object",
+            "properties": {
+              "scenario_id": { "type": "string" },
+              "hypothesis_ja": { "type": "string" },
+              "verdict": { "type": "string", "enum": ["supported", "refuted", "inconclusive"] }
+            }
+          }
+        },
+        "recommended_action_ja": { "type": ["string", "null"], "description": "推奨アクション（Track Bでは助言表現に制限）" },
+        "data_quality": {
+          "type": ["array", "null"],
+          "description": "データ品質フラグ（欠損・OCR低信頼度・完全性不一致 等）",
+          "items": { "type": "string" }
+        },
+        "hitl_status": {
+          "type": "string",
+          "enum": ["pending", "confirmed", "dismissed", "needs_more"],
+          "default": "pending",
+          "description": "人間の最終判断状態。AIはここを confirmed にできない"
+        },
+        "model_version": { "type": "string", "description": "ルール/モデル/閾値のバージョン（再現性）" },
+        "engagement_mode": { "type": "string", "enum": ["track_a", "track_b"] },
+        "generated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "Evidence": {
+      "type": "object",
+      "description": "証憑オブジェクト。read-only で収集。来歴(provenance)を必ず保持。",
+      "required": ["evidence_id", "type", "source", "collected_at", "provenance"],
+      "properties": {
+        "evidence_id": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["calendar_event", "email", "meeting_attendees", "route_estimate", "geo_resolution", "receipt_ocr", "sanctions_match", "master_record", "public_info"]
+        },
+        "source": { "type": "string", "description": "取得元（コネクタ名）" },
+        "collected_at": { "type": "string", "format": "date-time" },
+        "content": { "type": "object", "description": "正規化済み証憑内容（最小フィールド優先）" },
+        "ocr_confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "OCR等の信頼度。低信頼度はエスカレート" },
+        "injection_flags": {
+          "type": ["array", "null"],
+          "description": "プロンプトインジェクション/不可視テキスト等の検出（CONS-006）",
+          "items": { "type": "string" }
+        },
+        "provenance": {
+          "type": "object",
+          "description": "来歴。改ざん不能ログと連動。",
+          "required": ["collected_by_role", "access_scope"],
+          "properties": {
+            "collected_by_role": { "type": "string", "description": "取得主体の権限ロール" },
+            "access_scope": { "type": "string", "description": "使用した最小権限スコープ（例: Mail.Read）" },
+            "legal_basis_ref": { "type": ["string", "null"], "description": "利用目的・法的根拠の参照（プライバシー要件）" },
+            "retention_until": { "type": ["string", "null"], "format": "date", "description": "保存期限" }
+          }
+        }
+      }
+    },
+
+    "AuditLogEntry": {
+      "type": "object",
+      "description": "自律監査ログの1レコード。WORM + ハッシュチェーンで完全性を担保。上書き禁止・追記のみ。",
+      "required": ["log_id", "timestamp", "phase", "actor", "action", "prev_hash", "hash"],
+      "properties": {
+        "log_id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "finding_id": { "type": ["string", "null"] },
+        "expense_line_id": { "type": ["string", "null"] },
+        "phase": { "type": "string", "enum": ["observe", "hypothesize", "explore", "verify", "integrate", "hitl"] },
+        "actor": { "type": "string", "description": "agent | tool:<name> | human:<role>" },
+        "action": { "type": "string", "description": "実行内容（ツール呼出/判定/スコア更新/HITL判断 等）" },
+        "inputs": { "type": ["object", "null"], "description": "アクションの入力（引数・対象）" },
+        "outputs": { "type": ["object", "null"], "description": "アクションの結果（取得証憑ID・更新後スコア 等）" },
+        "termination_reason": { "type": ["string", "null"], "enum": ["max_iterations", "confidence_threshold", "evidence_exhausted", "cost_budget", "rate_limit", null] },
+        "model_version": { "type": ["string", "null"] },
+        "prev_hash": { "type": "string", "description": "直前レコードのハッシュ（チェーン）" },
+        "hash": { "type": "string", "description": "本レコードのハッシュ" }
+      }
+    }
+  }
+}

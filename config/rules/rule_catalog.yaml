@@ -1,0 +1,851 @@
+# ==========================================================================
+# 経費リスク評価ルールカタログ (rule_catalog.yaml)
+# --------------------------------------------------------------------------
+# 内部監査・不正調査の知見および過去不正事例に基づくルール群。
+# クライアントの規程・データ項目に合わせて追加・見直し可能。
+#
+# schema (各ルール):
+#   id:                 一意ID（CAT-NNN）
+#   category:           カテゴリID（categories 参照）
+#   name_ja:            ルール名
+#   description_ja:     抽出条件の説明
+#   severity:           low | medium | high | critical
+#   base_weight:        0-100 のスコア寄与（複数該当時は risk_scoring に従い合成）
+#   detection:
+#     type:             deterministic | statistical | ml_assisted | agent_verified
+#     condition_ja:     判定条件
+#     required_fields:  必要な入力フィールド（data_contracts の ExpenseLine 等）
+#   evidence:           収集・参照すべき証憑（agent_verified 時）
+#   applies_to:         対象費目（all または 費目リスト）
+#   false_positive_notes_ja: 誤検知の典型と除外条件（アラート疲れ対策・必須）
+#   hitl:               auto_dismiss | review | escalate（既定のトリアージ）
+#   references:         関連する統制・基準
+# ==========================================================================
+
+version: "1.0"
+
+metadata:
+  total_rules: 62
+  category_count: 10
+  source_ja: "内部監査・不正調査の知見および過去不正事例"
+  customizable: true
+  note_ja: "費目別の詳細な不正シナリオは fraud_scenarios.yaml を参照"
+
+# --------------------------------------------------------------------------
+# リスクスコアリング（誤検知管理・トリアージの基盤 / spec改善点5）
+# --------------------------------------------------------------------------
+risk_scoring:
+  scale: "0-100"
+  combination_ja: >-
+    複数ルール該当時は base_weight を加重合成（単純合算ではなく、上限100で
+    逓減加算）。ML 異常スコアと SHAP 寄与を統合し最終 risk_score を算出。
+  ml_blend_ja: "ルールスコア と ML外れ値スコア(IF/LOF/AE/PCA) を重み付き統合"
+  explainability_required: true   # 全スコアに 違反ルール / SHAP寄与 を添付（根拠なきスコア禁止）
+
+thresholds:
+  # 探索的分析ダッシュボードの "High閾値" に相当。クライアント別に調整可能。
+  high: 70          # これ以上はエージェント深掘り対象（ファネルの選別ライン）
+  medium: 40
+  triage:
+    auto_dismiss_below: 20   # 自動棄却（人手レビュー不要）
+    review_range: [20, 70]   # 人手レビュー
+    escalate_at_or_above: 70 # エージェント検証＋優先レビュー
+
+# --------------------------------------------------------------------------
+# カテゴリ定義（10カテゴリ）
+# --------------------------------------------------------------------------
+categories:
+  - { id: CTRL,  name_ja: 統制・承認 }
+  - { id: DUP,   name_ja: 重複 }
+  - { id: TIME,  name_ja: 時間 }
+  - { id: AMT,   name_ja: 金額 }
+  - { id: VEND,  name_ja: 取引先 }
+  - { id: PART,  name_ja: 参加者 }
+  - { id: CONS,  name_ja: 整合性 }
+  - { id: BEHV,  name_ja: 行動 }
+  - { id: PATT,  name_ja: パターン }
+  - { id: COMM,  name_ja: 通信・IT }
+
+# --------------------------------------------------------------------------
+# ルール群
+# --------------------------------------------------------------------------
+rules:
+
+  # ===== 統制・承認 (CTRL) =====
+  - id: CTRL-001
+    category: CTRL
+    name_ja: 自己承認
+    description_ja: 申請者と承認者が同一（自己承認）
+    severity: high
+    base_weight: 35
+    detection: { type: deterministic, condition_ja: "applicant_id == approver_id", required_fields: [applicant_id, approver_id] }
+    applies_to: [all]
+    false_positive_notes_ja: "正当な代理承認設定・小額自動承認の閾値内は除外。承認権限委譲ログを確認"
+    hitl: escalate
+    references: [J-SOX ITGC, 職務分掌]
+
+  - id: CTRL-002
+    category: CTRL
+    name_ja: 上限ギリギリ申請の多発
+    description_ja: 承認上限の直下に張り付く申請が同一申請者で多発
+    severity: medium
+    base_weight: 25
+    detection: { type: statistical, condition_ja: "申請額が承認上限の95-100%に集中する頻度が同職位平均を有意に超過", required_fields: [applicant_id, amount, approval_limit] }
+    applies_to: [all]
+    false_positive_notes_ja: "業務特性上、定常的に高額となる職種（営業等）は職位別基準で評価"
+    hitl: review
+    references: [統制回避]
+
+  - id: CTRL-003
+    category: CTRL
+    name_ja: 承認権限超過
+    description_ja: 承認者の決裁権限額を超える申請の承認
+    severity: high
+    base_weight: 30
+    detection: { type: deterministic, condition_ja: "amount > approver_authority_limit", required_fields: [amount, approver_id, approver_authority_limit] }
+    applies_to: [all]
+    false_positive_notes_ja: "上位者代理承認・特例決裁の正規記録があれば除外"
+    hitl: escalate
+    references: [職務権限規程]
+
+  - id: CTRL-004
+    category: CTRL
+    name_ja: 事後承認の常態化
+    description_ja: 取引発生後に遡って承認されるケースが常態化
+    severity: medium
+    base_weight: 20
+    detection: { type: deterministic, condition_ja: "approval_timestamp < transaction_date", required_fields: [approval_timestamp, transaction_date] }
+    applies_to: [all]
+    false_positive_notes_ja: "緊急対応の事後承認規程に則ったものは頻度で評価"
+    hitl: review
+    references: [統制活動]
+
+  - id: CTRL-005
+    category: CTRL
+    name_ja: 承認者・申請者の関係性
+    description_ja: 承認者と申請者が近親・利害関係（同一世帯/取引関係）
+    severity: medium
+    base_weight: 22
+    detection: { type: agent_verified, condition_ja: "公開情報・人事データから利害関係を推認", required_fields: [applicant_id, approver_id] }
+    evidence: [人事マスタ, 公開情報]
+    applies_to: [all]
+    false_positive_notes_ja: "推認のみでは確定不可。HITLで人間が判断"
+    hitl: review
+    references: [独立性, 利益相反]
+
+  - id: CTRL-006
+    category: CTRL
+    name_ja: 承認ワークフローの迂回
+    description_ja: 規定の承認段階をスキップした申請
+    severity: high
+    base_weight: 28
+    detection: { type: deterministic, condition_ja: "required_approval_steps とログの段階数が不一致", required_fields: [workflow_log, required_approval_steps] }
+    applies_to: [all]
+    false_positive_notes_ja: "ワークフロー設定変更時の移行期は構成変更履歴を確認"
+    hitl: escalate
+    references: [J-SOX ITGC]
+
+  # ===== 重複 (DUP) =====
+  - id: DUP-001
+    category: DUP
+    name_ja: 同一日・同一金額・同一取引先の重複
+    description_ja: 同一日・同一金額・同一取引先の申請が重複
+    severity: high
+    base_weight: 30
+    detection: { type: deterministic, condition_ja: "(date, amount, vendor_id) が複数明細で一致", required_fields: [transaction_date, amount, vendor_id] }
+    applies_to: [all]
+    false_positive_notes_ja: "同一店舗での正当な複数回利用（往復・複数人別精算）を除外条件で考慮"
+    hitl: escalate
+    references: [二重計上]
+
+  - id: DUP-002
+    category: DUP
+    name_ja: 法人カードと現金精算の二重計上
+    description_ja: 法人カード明細と現金精算で同一支出が二重計上
+    severity: high
+    base_weight: 32
+    detection: { type: deterministic, condition_ja: "法人カード明細と経費精算明細で (date±1, amount, merchant) が突合", required_fields: [transaction_date, amount, vendor_id, payment_method] }
+    applies_to: [all]
+    false_positive_notes_ja: "分割決済・部分精算のケースは金額按分で確認"
+    hitl: escalate
+    references: [二重計上]
+
+  - id: DUP-003
+    category: DUP
+    name_ja: 上限回避のための分割
+    description_ja: 1取引を承認上限以下に分割して複数申請
+    severity: high
+    base_weight: 28
+    detection: { type: statistical, condition_ja: "同一取引先・近接日に上限直下の申請が連続", required_fields: [vendor_id, transaction_date, amount, approval_limit] }
+    applies_to: [all]
+    false_positive_notes_ja: "定常的な小口反復取引（消耗品の都度購入等）は頻度・文脈で評価"
+    hitl: review
+    references: [統制回避]
+
+  - id: DUP-004
+    category: DUP
+    name_ja: 却下申請の再提出
+    description_ja: 一度却下された申請を内容微修正で再提出し承認取得
+    severity: medium
+    base_weight: 22
+    detection: { type: deterministic, condition_ja: "却下履歴と類似する後続の承認済み申請", required_fields: [rejection_log, applicant_id, amount, vendor_id] }
+    applies_to: [all]
+    false_positive_notes_ja: "正当な不備修正・再申請を除外。却下理由の解消有無を確認"
+    hitl: review
+    references: [統制回避]
+
+  - id: DUP-005
+    category: DUP
+    name_ja: 複数従業員による同一支出の重複請求
+    description_ja: 同一会食・同一移動を参加者各人が別々に請求
+    severity: high
+    base_weight: 26
+    detection: { type: agent_verified, condition_ja: "同一日時・同一店舗の複数申請者の交際費/会食を突合", required_fields: [transaction_date, vendor_id, participants, applicant_id] }
+    evidence: [予定表, 会議出席者]
+    applies_to: [交際費, 会議費, 接待]
+    false_positive_notes_ja: "別会計（割り勘の各自負担）が正規の場合あり。参加者・金額の整合で判断"
+    hitl: escalate
+    references: [二重計上]
+
+  # ===== 時間 (TIME) =====
+  - id: TIME-001
+    category: TIME
+    name_ja: 休日・深夜・長期休暇中の経費
+    description_ja: 休日・深夜・本人の長期休暇期間中に発生した経費
+    severity: medium
+    base_weight: 24
+    detection: { type: deterministic, condition_ja: "transaction_datetime が休日/深夜/休暇カレンダーに該当", required_fields: [transaction_datetime, applicant_id] }
+    evidence: [勤怠データ, 予定表]
+    applies_to: [all]
+    false_positive_notes_ja: "休日出勤・夜間業務が正規の職種/承認済シフトは除外"
+    hitl: review
+    references: [不正リスク対応基準]
+
+  - id: TIME-002
+    category: TIME
+    name_ja: 出張期間外・在宅日の交通費/会食
+    description_ja: 出張期間外、または在宅勤務日の交通費・会食申請
+    severity: medium
+    base_weight: 24
+    detection: { type: agent_verified, condition_ja: "出張予定/勤怠（在宅）と経費発生日の不整合", required_fields: [transaction_date, applicant_id, expense_category] }
+    evidence: [出張予定, 勤怠データ, 移動記録]
+    applies_to: [旅費交通費, 交際費, 会議費]
+    false_positive_notes_ja: "在宅日の正規の業務移動・近隣訪問は経路で確認"
+    hitl: review
+    references: [カラ出張]
+
+  - id: TIME-003
+    category: TIME
+    name_ja: 取引時刻と入力時刻の大幅乖離
+    description_ja: 取引発生から申請入力までが異常に長い/遡及入力
+    severity: low
+    base_weight: 12
+    detection: { type: deterministic, condition_ja: "abs(entry_timestamp - transaction_date) が基準超", required_fields: [entry_timestamp, transaction_date] }
+    applies_to: [all]
+    false_positive_notes_ja: "月締めまとめ入力の運用は基準値を運用実態に合わせる"
+    hitl: review
+    references: [整合性]
+
+  - id: TIME-004
+    category: TIME
+    name_ja: 同時刻の連続申請
+    description_ja: 物理的に不可能な短時間に多数の取引が連続
+    severity: medium
+    base_weight: 20
+    detection: { type: deterministic, condition_ja: "同一申請者で近接時刻に複数取引、移動可能性と矛盾", required_fields: [transaction_datetime, applicant_id, location] }
+    applies_to: [all]
+    false_positive_notes_ja: "同一施設内の連続購買等は地点整合で除外"
+    hitl: review
+    references: [行動分析]
+
+  - id: TIME-005
+    category: TIME
+    name_ja: 期末日付への集中入力
+    description_ja: 期末・月末日付に入力が不自然に集中
+    severity: low
+    base_weight: 14
+    detection: { type: statistical, condition_ja: "期末数日の入力件数が平常比で有意に増加", required_fields: [entry_timestamp] }
+    applies_to: [all]
+    false_positive_notes_ja: "締め日処理の正常な集中と区別（金額・費目の異常と複合評価）"
+    hitl: review
+    references: [パターン分析]
+
+  # ===== 金額 (AMT) =====
+  - id: AMT-001
+    category: AMT
+    name_ja: キリのいい金額の多発
+    description_ja: 端数のないキリのいい金額の申請が多発
+    severity: low
+    base_weight: 14
+    detection: { type: statistical, condition_ja: "末尾000等のラウンド数の比率が異常", required_fields: [amount] }
+    applies_to: [all]
+    false_positive_notes_ja: "定額手当・定額サービスはマスタで除外"
+    hitl: review
+    references: [概算・水増し]
+
+  - id: AMT-002
+    category: AMT
+    name_ja: 上限金額への一致
+    description_ja: 申請額が承認上限・費目上限にちょうど一致
+    severity: medium
+    base_weight: 20
+    detection: { type: deterministic, condition_ja: "amount == category_limit または approval_limit", required_fields: [amount, category_limit, approval_limit] }
+    applies_to: [all]
+    false_positive_notes_ja: "定額の上限消化（日当等）は費目特性で除外"
+    hitl: review
+    references: [統制回避]
+
+  - id: AMT-003
+    category: AMT
+    name_ja: ベンフォードの法則からの乖離
+    description_ja: 先頭桁分布がベンフォード分布から有意に乖離
+    severity: medium
+    base_weight: 18
+    detection: { type: statistical, condition_ja: "申請者/費目単位の先頭桁分布がベンフォード期待値とカイ二乗検定で乖離", required_fields: [amount] }
+    applies_to: [all]
+    false_positive_notes_ja: "母数が小さい集団は検定の信頼度が低い。サンプル数を確認"
+    hitl: review
+    references: [不正検査, ACFE]
+
+  - id: AMT-004
+    category: AMT
+    name_ja: ベンチマーク比の金額突出
+    description_ja: 同種取引・同店舗の相場に対し金額が突出して大/小
+    severity: medium
+    base_weight: 22
+    detection: { type: ml_assisted, condition_ja: "費目×取引先の金額分布で外れ値（IF/LOF）", required_fields: [amount, vendor_id, expense_category] }
+    applies_to: [all]
+    false_positive_notes_ja: "正当な高額（大人数会食等）は参加者数で正規化"
+    hitl: review
+    references: [外れ値検知]
+
+  - id: AMT-005
+    category: AMT
+    name_ja: 端数の不自然な一致
+    description_ja: 複数申請で同一の特異な端数が反復（捏造の痕跡）
+    severity: low
+    base_weight: 12
+    detection: { type: statistical, condition_ja: "特定端数の反復頻度が異常", required_fields: [amount] }
+    applies_to: [all]
+    false_positive_notes_ja: "税込端数・固定料金は除外"
+    hitl: review
+    references: [捏造]
+
+  # ===== 取引先 (VEND) =====
+  - id: VEND-001
+    category: VEND
+    name_ja: 反社・制裁・休眠先との取引
+    description_ja: 反社・制裁リスト・休眠/実体不明先との取引
+    severity: critical
+    base_weight: 50
+    detection: { type: agent_verified, condition_ja: "取引先を反社/制裁/公開情報リストと照合", required_fields: [vendor_id, vendor_name] }
+    evidence: [反社リスト, 制裁リスト, 公開情報]
+    applies_to: [all]
+    false_positive_notes_ja: "同名異社の誤判定に注意。所在地・登記情報で本人特定を確認"
+    hitl: escalate
+    references: [反社対応, AML, 公開情報]
+
+  - id: VEND-002
+    category: VEND
+    name_ja: 特定店舗・取引先への集中
+    description_ja: 特定の店舗・取引先への支出が異常に集中
+    severity: medium
+    base_weight: 22
+    detection: { type: statistical, condition_ja: "申請者の取引先集中度（HHI等）が異常", required_fields: [vendor_id, applicant_id, amount] }
+    applies_to: [all]
+    false_positive_notes_ja: "近隣・常用店の正当な反復は文脈で評価"
+    hitl: review
+    references: [キックバック, 癒着]
+
+  - id: VEND-003
+    category: VEND
+    name_ja: 新規取引先の初回高額
+    description_ja: 新規登録直後の取引先へ初回から高額支出
+    severity: medium
+    base_weight: 20
+    detection: { type: deterministic, condition_ja: "vendor 初出 かつ amount が費目上位分位", required_fields: [vendor_id, amount, vendor_first_seen] }
+    evidence: [取引先マスタ, 公開情報]
+    applies_to: [all]
+    false_positive_notes_ja: "正規の新規取引開始（与信済）は登録経緯を確認"
+    hitl: review
+    references: [架空取引先]
+
+  - id: VEND-004
+    category: VEND
+    name_ja: 取引先所在地・業態の不整合
+    description_ja: 取引先の所在地・業態が申請内容と矛盾
+    severity: medium
+    base_weight: 22
+    detection: { type: agent_verified, condition_ja: "地図/公開情報で店舗の所在地・業態を確認し申請費目と照合", required_fields: [vendor_name, vendor_address, expense_category] }
+    evidence: [地図API, 公開情報, 領収書OCR]
+    applies_to: [交際費, 会議費, 消耗品, 接待]
+    false_positive_notes_ja: "複合業態・移転直後の情報遅延に注意"
+    hitl: review
+    references: [実在性]
+
+  - id: VEND-005
+    category: VEND
+    name_ja: 関連当事者取引
+    description_ja: 従業員・役員の関連当事者が取引先
+    severity: high
+    base_weight: 28
+    detection: { type: agent_verified, condition_ja: "取引先と従業員/役員の関連性を公開情報・人事データから推認", required_fields: [vendor_id, applicant_id] }
+    evidence: [公開情報, 人事マスタ]
+    applies_to: [all]
+    false_positive_notes_ja: "推認のみ。利益相反の開示有無をHITLで確認"
+    hitl: escalate
+    references: [利益相反, 関連当事者]
+
+  # ===== 参加者 (PART) =====
+  - id: PART-001
+    category: PART
+    name_ja: 参加者欄が空欄/「他○名」のみ
+    description_ja: 交際費の参加者欄が空欄、または「他○名」のみ
+    severity: medium
+    base_weight: 22
+    detection: { type: deterministic, condition_ja: "participants が空 または 不特定表現のみ", required_fields: [participants, expense_category] }
+    applies_to: [交際費, 接待, 会議費]
+    false_positive_notes_ja: "大規模イベント等で名簿別添の運用は添付有無を確認"
+    hitl: review
+    references: [交際費の実在性]
+
+  - id: PART-002
+    category: PART
+    name_ja: 社内のみの交際費計上
+    description_ja: 社外参加者がなく社内のみなのに交際費（接待）計上
+    severity: medium
+    base_weight: 20
+    detection: { type: deterministic, condition_ja: "participants が全員社内 かつ category==交際費", required_fields: [participants, expense_category, employee_master] }
+    applies_to: [交際費, 接待]
+    false_positive_notes_ja: "費目誤りの可能性（会議費等への振替）。税務上の交際費区分と整合確認"
+    hitl: review
+    references: [費目付替え, 税務]
+
+  - id: PART-003
+    category: PART
+    name_ja: 参加人数と金額の不整合
+    description_ja: 申告参加人数に対し金額が過大/過小
+    severity: medium
+    base_weight: 18
+    detection: { type: statistical, condition_ja: "amount / headcount が費目相場の外れ値", required_fields: [amount, participants, expense_category] }
+    applies_to: [交際費, 会議費, 接待]
+    false_positive_notes_ja: "高級店・少人数高単価の正規ケースは店舗業態で確認"
+    hitl: review
+    references: [水増し]
+
+  - id: PART-004
+    category: PART
+    name_ja: 同一参加者の反復
+    description_ja: 特定の社外参加者との会食が不自然に反復
+    severity: low
+    base_weight: 14
+    detection: { type: statistical, condition_ja: "同一参加者名の出現頻度が異常", required_fields: [participants] }
+    applies_to: [交際費, 接待]
+    false_positive_notes_ja: "重要取引先との正常な継続的関係を文脈で評価"
+    hitl: review
+    references: [癒着]
+
+  - id: PART-005
+    category: PART
+    name_ja: 参加者と会議出席者の不一致
+    description_ja: 申請の参加者が会議/予定の出席者と一致しない
+    severity: medium
+    base_weight: 22
+    detection: { type: agent_verified, condition_ja: "申請participants と Graph会議出席者/予定表を突合", required_fields: [participants, transaction_datetime, applicant_id] }
+    evidence: [予定表, 会議出席者, 送信メール]
+    applies_to: [交際費, 会議費, 接待]
+    false_positive_notes_ja: "非公式会合で予定表未登録の正規ケースあり。メール等補助証憑で確認"
+    hitl: escalate
+    references: [実在性検証]
+
+  # ===== 整合性 (CONS) =====
+  - id: CONS-001
+    category: CONS
+    name_ja: 領収書記載額と申請額の不一致
+    description_ja: 領収書OCR記載額と申請額が不一致
+    severity: high
+    base_weight: 30
+    detection: { type: agent_verified, condition_ja: "ocr.amount != claim.amount", required_fields: [amount, receipt_image] }
+    evidence: [領収書OCR]
+    applies_to: [all]
+    false_positive_notes_ja: "OCR誤読・複数領収書合算・税抜税込差を確認。OCR信頼度を併記"
+    hitl: escalate
+    references: [水増し, 整合性]
+
+  - id: CONS-002
+    category: CONS
+    name_ja: 領収書の日付/宛名/但書の矛盾・改ざん痕
+    description_ja: 領収書の日付・宛名・但書に矛盾、または改ざんの痕跡
+    severity: high
+    base_weight: 32
+    detection: { type: agent_verified, condition_ja: "OCRと申請の日付/宛名/但書を照合し、画像に改ざん痕（フォント/解像度不整合等）を検知", required_fields: [transaction_date, receipt_image, vendor_name] }
+    evidence: [領収書OCR, 画像解析]
+    applies_to: [all]
+    false_positive_notes_ja: "手書き・低画質による誤検知に注意。改ざん痕は人間が最終確認"
+    hitl: escalate
+    references: [改ざん, 整合性]
+
+  - id: CONS-003
+    category: CONS
+    name_ja: 上限超過時の領収書欠落
+    description_ja: 領収書添付義務額を超えるのに領収書がない
+    severity: medium
+    base_weight: 24
+    detection: { type: deterministic, condition_ja: "amount >= receipt_required_threshold かつ receipt_image 欠落", required_fields: [amount, receipt_image, receipt_required_threshold] }
+    applies_to: [all]
+    false_positive_notes_ja: "電子領収書の別経路提出を確認"
+    hitl: review
+    references: [証憑要件]
+
+  - id: CONS-004
+    category: CONS
+    name_ja: 費目と取引先業態の不整合
+    description_ja: 費目と取引先の業態が不整合（例:会議費で酒類主体店）
+    severity: medium
+    base_weight: 20
+    detection: { type: agent_verified, condition_ja: "expense_category と店舗業態（地図/公開情報）の整合判定", required_fields: [expense_category, vendor_name] }
+    evidence: [地図API, 公開情報, 領収書OCR]
+    applies_to: [会議費, 消耗品, 交際費]
+    false_positive_notes_ja: "複合業態店は誤判定しやすい。但書・明細で確認"
+    hitl: review
+    references: [費目付替え]
+
+  - id: CONS-005
+    category: CONS
+    name_ja: 通貨・税区分の不整合
+    description_ja: 通貨換算・消費税区分が規程/実態と不整合
+    severity: low
+    base_weight: 12
+    detection: { type: deterministic, condition_ja: "為替レート/税区分が基準と乖離", required_fields: [amount, currency, tax_category] }
+    applies_to: [all]
+    false_positive_notes_ja: "レート適用日の差異は許容幅で評価"
+    hitl: review
+    references: [整合性, 税務]
+
+  # ===== 行動 (BEHV) =====
+  - id: BEHV-001
+    category: BEHV
+    name_ja: 同時刻に離れた複数地点で経費発生
+    description_ja: 同一申請者が同時刻に物理的に離れた複数地点で経費
+    severity: high
+    base_weight: 28
+    detection: { type: agent_verified, condition_ja: "地点間の移動可能性を地図APIで検証し矛盾を判定", required_fields: [transaction_datetime, location, applicant_id] }
+    evidence: [地図API, 移動記録]
+    applies_to: [all]
+    false_positive_notes_ja: "オンライン決済・予約の決済地と利用地の差を区別"
+    hitl: escalate
+    references: [実在性, 行動分析]
+
+  - id: BEHV-002
+    category: BEHV
+    name_ja: 会食予定がスケジュールに存在しない
+    description_ja: 申請された会食に対応する予定がスケジュールにない
+    severity: high
+    base_weight: 26
+    detection: { type: agent_verified, condition_ja: "予定表に当該日時の会食予定が存在するか照会", required_fields: [transaction_datetime, expense_category, applicant_id] }
+    evidence: [予定表, 送信メール, 会議出席者]
+    applies_to: [交際費, 会議費, 接待]
+    false_positive_notes_ja: "予定表未登録の非公式会合は、御礼メール等の補助証憑で実在性を確認"
+    hitl: escalate
+    references: [実体なき会食, カラ申請]
+
+  - id: BEHV-003
+    category: BEHV
+    name_ja: 申請者行動プロファイルからの逸脱
+    description_ja: 金額分布・頻度・取引先集中・時間帯が本人の通常行動から逸脱
+    severity: medium
+    base_weight: 22
+    detection: { type: ml_assisted, condition_ja: "申請者単位の行動プロファイルからの逸脱を異常スコア化（Autoencoder/PCA）", required_fields: [applicant_id, amount, vendor_id, transaction_datetime] }
+    applies_to: [all]
+    false_positive_notes_ja: "異動・昇格・担当変更による正当な行動変化を期間で区別"
+    hitl: review
+    references: [外れ値検知, XAI]
+
+  - id: BEHV-004
+    category: BEHV
+    name_ja: 深夜・自宅方面タクシーの常態化
+    description_ja: 深夜・自宅方面タクシー利用が常態化（私的利用疑義）
+    severity: medium
+    base_weight: 20
+    detection: { type: agent_verified, condition_ja: "タクシー利用の時刻・方面を勤怠/予定表と照合し私的利用を推認", required_fields: [transaction_datetime, location, applicant_id, expense_category] }
+    evidence: [勤怠データ, 予定表, 地図API]
+    applies_to: [旅費交通費]
+    false_positive_notes_ja: "正規の深夜業務・終電後対応は勤怠承認で区別"
+    hitl: review
+    references: [私的利用]
+
+  - id: BEHV-005
+    category: BEHV
+    name_ja: 経費発生に対応する業務記録の欠如
+    description_ja: 経費に対応する業務（会議/出張/案件）記録が欠如
+    severity: medium
+    base_weight: 22
+    detection: { type: agent_verified, condition_ja: "予定表/案件記録/移動記録に対応する活動が存在するか", required_fields: [transaction_date, applicant_id, expense_category] }
+    evidence: [予定表, 移動記録, 案件記録]
+    applies_to: [all]
+    false_positive_notes_ja: "記録外の正規活動を補助証憑で確認"
+    hitl: review
+    references: [実在性]
+
+  # ===== パターン (PATT) =====
+  - id: PATT-001
+    category: PATT
+    name_ja: 期末・賞与査定前の経費急増
+    description_ja: 期末・賞与査定前に経費が急増（予算消化/数値操作疑義）
+    severity: medium
+    base_weight: 22
+    detection: { type: statistical, condition_ja: "期末/査定前期間の高リスク経費が時系列で急増", required_fields: [transaction_date, amount, applicant_id] }
+    applies_to: [all]
+    false_positive_notes_ja: "季節性のある正常な業務集中（年度末プロジェクト等）と区別"
+    hitl: review
+    references: [予算消化, 数値操作]
+
+  - id: PATT-002
+    category: PATT
+    name_ja: 上限に向けた漸増
+    description_ja: 申請額が回を追って上限に向け単調漸増
+    severity: low
+    base_weight: 14
+    detection: { type: statistical, condition_ja: "申請者の費目別申請額が単調増加トレンド", required_fields: [transaction_date, amount, applicant_id, expense_category] }
+    applies_to: [all]
+    false_positive_notes_ja: "物価上昇・業務拡大による正当な増加を控除"
+    hitl: review
+    references: [統制回避]
+
+  - id: PATT-003
+    category: PATT
+    name_ja: 季節性の破れ
+    description_ja: 過去の季節パターンから外れた異常な発生
+    severity: low
+    base_weight: 12
+    detection: { type: statistical, condition_ja: "時系列季節分解の残差が異常", required_fields: [transaction_date, amount] }
+    applies_to: [all]
+    false_positive_notes_ja: "事業構造変化による正常なパターン変化を期間で区別"
+    hitl: review
+    references: [時系列異常]
+
+  - id: PATT-004
+    category: PATT
+    name_ja: 役割変更後の支出構造変化
+    description_ja: 異動・昇格後に支出構造が不自然に変化
+    severity: low
+    base_weight: 14
+    detection: { type: ml_assisted, condition_ja: "役割変更イベント前後で支出分布が有意に変化", required_fields: [applicant_id, transaction_date, amount, vendor_id] }
+    applies_to: [all]
+    false_positive_notes_ja: "職責拡大に伴う正当な変化が大半。複合要因で評価"
+    hitl: review
+    references: [行動分析]
+
+  - id: PATT-005
+    category: PATT
+    name_ja: 費目×取引先の低頻度組合せ
+    description_ja: 費目と取引先の組合せ頻度が全社的に低い（異常な取引）
+    severity: medium
+    base_weight: 18
+    detection: { type: ml_assisted, condition_ja: "費目×取引先の共起頻度が低く異常スコア高（IF/LOF）", required_fields: [expense_category, vendor_id] }
+    applies_to: [all]
+    false_positive_notes_ja: "新規・希少だが正当な取引を文脈で確認"
+    hitl: review
+    references: [外れ値検知]
+
+  # ===== 通信・IT (COMM) =====
+  - id: COMM-001
+    category: COMM
+    name_ja: 退職者名義の継続課金
+    description_ja: 退職者名義のサブスク・ライセンスが継続課金
+    severity: high
+    base_weight: 28
+    detection: { type: deterministic, condition_ja: "課金名義 in 退職者リスト かつ 課金継続", required_fields: [subscriber_id, employee_status, billing_active] }
+    evidence: [人事マスタ, 購買データ]
+    applies_to: [通信・IT]
+    false_positive_notes_ja: "引継ぎ中の正規移行期間は猶予を考慮"
+    hitl: escalate
+    references: [私的サブスク, IT資産管理]
+
+  - id: COMM-002
+    category: COMM
+    name_ja: 私的サブスクリプション
+    description_ja: 業務無関係の私的サブスクを経費計上
+    severity: medium
+    base_weight: 22
+    detection: { type: agent_verified, condition_ja: "サービス名を業務関連性で分類（公開情報）", required_fields: [vendor_name, expense_category, description] }
+    evidence: [公開情報]
+    applies_to: [通信・IT]
+    false_positive_notes_ja: "業務利用と私的利用の併用サービスは利用実態で判断"
+    hitl: review
+    references: [私的利用]
+
+  - id: COMM-003
+    category: COMM
+    name_ja: 未使用ライセンスの継続支払
+    description_ja: 利用実績のないライセンス/回線への継続支払
+    severity: medium
+    base_weight: 18
+    detection: { type: deterministic, condition_ja: "利用ログなし かつ 課金継続", required_fields: [subscriber_id, usage_log, billing_active] }
+    applies_to: [通信・IT]
+    false_positive_notes_ja: "予備回線・災害対策の正規保有は台帳で確認"
+    hitl: review
+    references: [IT資産管理, 無駄コスト]
+
+  - id: COMM-004
+    category: COMM
+    name_ja: シャドーIT
+    description_ja: 承認外のSaaS/クラウド利用（情報管理外の支出）
+    severity: medium
+    base_weight: 20
+    detection: { type: agent_verified, condition_ja: "承認済SaaS台帳に存在しない課金", required_fields: [vendor_name, approved_saas_list] }
+    evidence: [SaaS台帳, 公開情報]
+    applies_to: [通信・IT]
+    false_positive_notes_ja: "申請中・例外承認の正規利用を確認"
+    hitl: review
+    references: [情報セキュリティ, IT統制]
+
+  - id: COMM-005
+    category: COMM
+    name_ja: 重複SaaS契約
+    description_ja: 同一機能のSaaSが複数部門で重複契約
+    severity: low
+    base_weight: 12
+    detection: { type: deterministic, condition_ja: "機能カテゴリ重複のSaaS契約を検出", required_fields: [vendor_name, department, service_category] }
+    applies_to: [通信・IT]
+    false_positive_notes_ja: "部門要件差による正当な使い分けあり"
+    hitl: review
+    references: [コスト最適化]
+
+  # ===== 追加（カテゴリ横断の高度検知）=====
+  - id: AMT-006
+    category: AMT
+    name_ja: 為替・多通貨の異常
+    description_ja: 多通貨申請で換算レート/通貨選択が不自然
+    severity: low
+    base_weight: 12
+    detection: { type: statistical, condition_ja: "通貨・レートの異常パターン", required_fields: [amount, currency] }
+    applies_to: [旅費交通費, 交際費]
+    false_positive_notes_ja: "海外出張の正規多通貨を文脈で除外"
+    hitl: review
+    references: [整合性]
+
+  - id: VEND-006
+    category: VEND
+    name_ja: 取引先名の表記揺れによる名寄せ回避
+    description_ja: 同一取引先を表記揺れで別先に見せ集中を隠蔽
+    severity: medium
+    base_weight: 18
+    detection: { type: ml_assisted, condition_ja: "取引先名の類似度クラスタリングで名寄せし集中を再評価", required_fields: [vendor_name, applicant_id, amount] }
+    applies_to: [all]
+    false_positive_notes_ja: "正規の別法人（同名グループ会社等）の誤統合に注意"
+    hitl: review
+    references: [集中隠蔽, 名寄せ]
+
+  - id: CONS-006
+    category: CONS
+    name_ja: OCR埋め込み指示の検出
+    description_ja: 領収書/証憑のテキストにAI向け指示文等の不審な埋め込み
+    severity: high
+    base_weight: 30
+    detection: { type: agent_verified, condition_ja: "OCR/メタデータから判定操作を狙う注入パターン・不可視テキストを検知", required_fields: [receipt_image] }
+    evidence: [領収書OCR, メタデータ解析]
+    applies_to: [all]
+    false_positive_notes_ja: "正規の注意書き・定型文との区別。検出時は隠蔽の疑いとしてHITLへ"
+    hitl: escalate
+    references: [プロンプトインジェクション, 検知回避]
+
+  - id: DUP-006
+    category: DUP
+    name_ja: 同一領収書の複数回使用
+    description_ja: 同一の領収書画像が複数申請で再利用される
+    severity: high
+    base_weight: 30
+    detection: { type: agent_verified, condition_ja: "領収書画像のハッシュ/特徴量が複数明細で一致", required_fields: [receipt_image] }
+    evidence: [領収書OCR, 画像ハッシュ]
+    applies_to: [all]
+    false_positive_notes_ja: "再アップロード（差戻し対応）と区別。申請IDの重複を確認"
+    hitl: escalate
+    references: [証憑再利用, 二重計上]
+
+  - id: TIME-006
+    category: TIME
+    name_ja: 長期休暇申請と経費発生の矛盾
+    description_ja: 本人が長期休暇/欠勤として申請した期間に業務経費が発生
+    severity: medium
+    base_weight: 22
+    detection: { type: agent_verified, condition_ja: "勤怠の休暇区分と経費発生日が矛盾", required_fields: [transaction_date, applicant_id] }
+    evidence: [勤怠データ, 予定表]
+    applies_to: [all]
+    false_positive_notes_ja: "休暇中の緊急対応（承認済）は除外"
+    hitl: review
+    references: [実在性, カラ申請]
+
+  - id: AMT-007
+    category: AMT
+    name_ja: 概算・見積のままの精算
+    description_ja: 実額確定前の概算・見積額で精算（後日調整なし）
+    severity: low
+    base_weight: 12
+    detection: { type: deterministic, condition_ja: "概算フラグ かつ 後続の差額調整明細なし", required_fields: [amount, estimate_flag] }
+    applies_to: [all]
+    false_positive_notes_ja: "少額の概算許容運用は基準内で除外"
+    hitl: review
+    references: [整合性]
+
+  - id: PART-006
+    category: PART
+    name_ja: 接待相手の公務員/みなし公務員該当
+    description_ja: 接待・贈答の相手方が公務員・みなし公務員に該当
+    severity: critical
+    base_weight: 45
+    detection: { type: agent_verified, condition_ja: "参加者・相手方を公開情報で公務員該当性チェック", required_fields: [participants, vendor_name] }
+    evidence: [公開情報]
+    applies_to: [交際費, 接待]
+    false_positive_notes_ja: "同名異人の誤判定に注意。所属の特定をHITLで確認"
+    hitl: escalate
+    references: [贈収賄防止, 不正競争防止法, FCPA/UKBA]
+
+  - id: BEHV-006
+    category: BEHV
+    name_ja: 閾値下の積み上げ（スミング）
+    description_ja: 承認・領収書要否の閾値直下の小額申請を高頻度で積み上げ
+    severity: medium
+    base_weight: 20
+    detection: { type: statistical, condition_ja: "閾値直下の小額申請の頻度が同職位平均を有意に超過", required_fields: [amount, applicant_id, receipt_required_threshold] }
+    applies_to: [all]
+    false_positive_notes_ja: "日常的小口経費が多い職種は職位別基準で評価"
+    hitl: review
+    references: [統制回避, スミング]
+
+  - id: PATT-006
+    category: PATT
+    name_ja: 承認者交代直後の申請増
+    description_ja: 承認者の交代・異動直後に申請が増加（統制弱体化の悪用）
+    severity: low
+    base_weight: 14
+    detection: { type: statistical, condition_ja: "承認者変更イベント後に当該配下の申請額/件数が有意に増加", required_fields: [approver_id, transaction_date, amount] }
+    applies_to: [all]
+    false_positive_notes_ja: "組織再編に伴う正常な増減と区別"
+    hitl: review
+    references: [統制環境]
+
+  - id: COMM-006
+    category: COMM
+    name_ja: 個人デバイス通信費の過大計上
+    description_ja: 個人デバイスの通信費を業務按分を超えて過大計上
+    severity: low
+    base_weight: 12
+    detection: { type: statistical, condition_ja: "通信費が按分基準・同職位相場を超過", required_fields: [amount, applicant_id, expense_category] }
+    applies_to: [通信・IT]
+    false_positive_notes_ja: "業務使用比率の高い職種は実態で評価"
+    hitl: review
+    references: [按分, 私的利用]
+
+  - id: VEND-007
+    category: VEND
+    name_ja: 架空取引先の疑い
+    description_ja: 実在確認できない取引先（登記・所在・公開情報なし）
+    severity: high
+    base_weight: 32
+    detection: { type: agent_verified, condition_ja: "公開情報・地図で取引先の実在を確認できない", required_fields: [vendor_name, vendor_address] }
+    evidence: [公開情報, 地図API, 領収書OCR]
+    applies_to: [all]
+    false_positive_notes_ja: "個人事業主・新設法人で情報が薄いだけのケースを区別"
+    hitl: escalate
+    references: [架空取引, 実在性]
