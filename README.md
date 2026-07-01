@@ -90,6 +90,9 @@ python run.py demo --out out/
 python run.py run --input samples/synthetic/expense_lines.json \
                   --masters samples/synthetic/masters.json --out out/
 
+# 監査人コンソール（HITL Web UI）を起動 → http://127.0.0.1:8000
+python serve.py
+
 # テスト
 pytest
 ```
@@ -97,6 +100,19 @@ pytest
 生成物: `out/all_findings.csv`（全件スコア）、`out/alerts.xlsx`（アラート＋サマリ）、
 `out/summary.json`、`out/summary.md`（エグゼクティブサマリ）、
 `out/audit_log.jsonl`（WORM＋ハッシュチェーンの監査ログ）。
+
+### 監査人コンソール（HITL Web UI）とデモ
+
+`python serve.py` で L6 の HITL コンソール（FastAPI + SPA）が起動します。配色は PwC の
+ブランド VI に準拠したアプローチ（ロゴ・商標は非使用）。**操作アニメーション付きのデモ動画
+（TTSナレーション）と各画面の静止画は [`docs/demo/`](docs/demo/README.md) にあります。**
+
+- 画面: ダッシュボード（コスト・ファネル可視化）／所見一覧／所見詳細（根拠・ML寄与・仮説・
+  証憑・HITL操作）／監査証跡／ガバナンス。
+- **HITL の要**: `hitl_status` を confirmed にできるのは人間の操作だけ。AI 出力は常に pending。
+  判断は監査ログに追記されチェーンが継続します。
+- 独立性・ブランド配慮: 成果や数値を保証・誇張せず、検出力は**合成データの参考値**として
+  免責を明示。デモデータは**架空**で、実在の企業名・製品名・競合に触れません。
 
 ### モジュール構成（docs のレイヤに対応）
 

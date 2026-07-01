@@ -1,0 +1,5 @@
+# デモ動画生成に追加で必要（本体の実行・テストには不要）
+# scripts/make_demo.py と scripts/shots.py が使用する。
+playwright>=1.40        # UI操作の録画・スクリーンショット（要: python -m playwright install chromium）
+edge-tts>=6.1           # TTSサービス（Microsoft Edge neural voice。ja-JP-NanamiNeural）
+imageio-ffmpeg>=0.5     # 同梱 ffmpeg バイナリ（音声合成・muxing）
